@@ -451,6 +451,24 @@ class PurchaseReportGenerator:
         print(f"Excelファイルを出力しました: {file_path}")
         return str(file_path)
     
+    def _find_column_by_keywords(self, df, keywords):
+        """
+        キーワードに基づいて列名を検索する
+        
+        Args:
+            df (pandas.DataFrame): 検索対象のDataFrame
+            keywords (list): 検索キーワードのリスト
+        
+        Returns:
+            str: 見つかった列名、見つからない場合はNone
+        """
+        for col in df.columns:
+            col_lower = str(col).lower()
+            for keyword in keywords:
+                if keyword.lower() in col_lower:
+                    return col
+        return None
+
     def _format_data_for_excel(self, filtered_data):
         """
         画像の列構成に合わせてデータを整形
@@ -464,44 +482,112 @@ class PurchaseReportGenerator:
         # 画像の列構成に合わせてデータを整形
         formatted_data = pd.DataFrame()
         
-        # A列: 分類コード
-        formatted_data['分類コード'] = filtered_data['分類ｺｰﾄﾞ'].astype(str).str.zfill(2)
+        # 列名の柔軟な検索
+        category_code_col = self._find_column_by_keywords(filtered_data, ['分類', 'コード', '分類ｺｰﾄﾞ'])
+        category_name_col = self._find_column_by_keywords(filtered_data, ['分類名称'])
+        supplier_code_col = self._find_column_by_keywords(filtered_data, ['仕入先', 'コード', '仕入先ｺｰﾄﾞ'])
+        supplier_name_col = self._find_column_by_keywords(filtered_data, ['仕入先', '略称'])
+        file_no_col = self._find_column_by_keywords(filtered_data, ['ﾌｧｲﾙNO', 'ファイル', 'NO'])
+        unit_no_col = self._find_column_by_keywords(filtered_data, ['ﾕﾆｯﾄNO', 'UNIT', 'ユニット'])
+        part_no_col = self._find_column_by_keywords(filtered_data, ['部品番号'])
+        item_name_col = self._find_column_by_keywords(filtered_data, ['品目名称', '品名'])
+        manufacturer_col = self._find_column_by_keywords(filtered_data, ['ﾒｰｶｰ名', 'メーカー'])
+        material_col = self._find_column_by_keywords(filtered_data, ['材質・型式', '材質', '型式'])
+        quantity_col = self._find_column_by_keywords(filtered_data, ['受入数量', '数量', '数'])
+        delivery_date_col = self._find_column_by_keywords(filtered_data, ['納入日', '受入日'])
+        unit_price_col = self._find_column_by_keywords(filtered_data, ['受入単価', '単価'])
         
-        # B列: 分類名称
-        formatted_data['分類名称'] = filtered_data['分類名称_置換後']
+        # A列: 分類コード
+        if category_code_col:
+            formatted_data['分類コード'] = filtered_data[category_code_col].astype(str).str.zfill(2)
+        else:
+            formatted_data['分類コード'] = ''
+        
+        # B列: 分類名称（置換後）
+        if category_name_col:
+            # 分類置換テーブルを適用
+            category_code_col_for_mapping = self._find_column_by_keywords(filtered_data, ['分類', 'コード', '分類ｺｰﾄﾞ'])
+            if category_code_col_for_mapping:
+                formatted_data['分類名称'] = filtered_data[category_code_col_for_mapping].astype(str).str.zfill(2).map(CATEGORY_MAPPING).fillna(filtered_data[category_name_col])
+            else:
+                formatted_data['分類名称'] = filtered_data[category_name_col]
+        else:
+            formatted_data['分類名称'] = ''
         
         # C列: 仕入先コード
-        formatted_data['仕入先コード'] = filtered_data['仕入先ｺｰﾄﾞ']
+        if supplier_code_col:
+            formatted_data['仕入先コード'] = filtered_data[supplier_code_col]
+        else:
+            formatted_data['仕入先コード'] = ''
         
         # D列: 仕入先
-        formatted_data['仕入先'] = filtered_data['仕入先略称']
+        if supplier_name_col:
+            formatted_data['仕入先'] = filtered_data[supplier_name_col]
+        else:
+            formatted_data['仕入先'] = ''
         
         # E列: ファイルNo.
-        formatted_data['ファイルNo.'] = filtered_data['ﾌｧｲﾙNO']
+        if file_no_col:
+            formatted_data['ファイルNo.'] = filtered_data[file_no_col]
+        else:
+            formatted_data['ファイルNo.'] = ''
         
         # F列: UNIT
-        formatted_data['UNIT'] = filtered_data['ﾕﾆｯﾄNO'].fillna('')
+        if unit_no_col:
+            formatted_data['UNIT'] = filtered_data[unit_no_col].fillna('')
+        else:
+            formatted_data['UNIT'] = ''
         
         # G列: No. (部品番号) - 整数として表示
-        formatted_data['No.'] = filtered_data['部品番号'].fillna(0).astype(int)
+        if part_no_col:
+            # 数値に変換可能なもののみ変換、それ以外は0
+            def safe_int_convert(x):
+                try:
+                    if pd.isna(x):
+                        return 0
+                    return int(float(x))
+                except (ValueError, TypeError):
+                    return 0
+            
+            formatted_data['No.'] = filtered_data[part_no_col].apply(safe_int_convert)
+        else:
+            formatted_data['No.'] = 0
         
         # H列: 品名 (品目名称)
-        formatted_data['品名'] = filtered_data['品目名称']
+        if item_name_col:
+            formatted_data['品名'] = filtered_data[item_name_col]
+        else:
+            formatted_data['品名'] = ''
         
         # I列: メーカー
-        formatted_data['メーカー'] = filtered_data['ﾒｰｶｰ名']
+        if manufacturer_col:
+            formatted_data['メーカー'] = filtered_data[manufacturer_col]
+        else:
+            formatted_data['メーカー'] = ''
         
         # J列: 材質・型式
-        formatted_data['材質・型式'] = filtered_data['材質・型式']
+        if material_col:
+            formatted_data['材質・型式'] = filtered_data[material_col]
+        else:
+            formatted_data['材質・型式'] = ''
         
         # K列: 数 (受入数量のみ、単位なし)
-        formatted_data['数'] = filtered_data['受入数量'].fillna(0).astype(int)
+        if quantity_col:
+            formatted_data['数'] = filtered_data[quantity_col].fillna(0).astype(int)
+        else:
+            formatted_data['数'] = 0
         
         # L列: 受入日 (納入日の日付データをそのまま)
-        formatted_data['受入日'] = filtered_data['納入日']
+        if delivery_date_col:
+            formatted_data['受入日'] = filtered_data[delivery_date_col]
+        else:
+            formatted_data['受入日'] = ''
         
         # M列: 単価 (受入単価) - 数値として表示
-        formatted_data['単価'] = filtered_data['受入単価'].fillna(0)
+        if unit_price_col:
+            formatted_data['単価'] = filtered_data[unit_price_col].fillna(0)
+        else:
+            formatted_data['単価'] = 0
         
         return formatted_data
     
