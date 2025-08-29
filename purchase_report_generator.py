@@ -10,6 +10,8 @@ import os
 import json
 from pathlib import Path
 from datetime import datetime
+import tkinter as tk
+from tkinter import filedialog, messagebox
 
 # 分類置換テーブル（分類コード -> 置換名称）
 CATEGORY_MAPPING = {
@@ -39,44 +41,198 @@ CATEGORY_MAPPING = {
     '104': 'S:旅費'
 }
 
+# Excel出力パターンの列定義とマッピング情報
+EXCEL_OUTPUT_COLUMNS = [
+    {
+        'column': 'A',
+        'title': '分類コード',
+        'description': '分類コード（整数として表示）',
+        'source_keywords': ['分類', 'コード', '分類ｺｰﾄﾞ'],
+        'data_type': 'int',
+        'transformation': 'safe_int_convert_category'
+    },
+    {
+        'column': 'B',
+        'title': '分類名称',
+        'description': '分類名称（置換後）',
+        'source_keywords': ['分類名称'],
+        'data_type': 'string',
+        'transformation': 'category_mapping'
+    },
+    {
+        'column': 'C',
+        'title': '仕入先コード',
+        'description': '仕入先コード',
+        'source_keywords': ['仕入先ｺｰﾄﾞ'],
+        'data_type': 'string',
+        'transformation': 'direct_copy'
+    },
+    {
+        'column': 'D',
+        'title': '仕入先',
+        'description': '仕入先名称',
+        'source_keywords': ['仕入先略称'],
+        'data_type': 'string',
+        'transformation': 'direct_copy'
+    },
+    {
+        'column': 'E',
+        'title': 'ファイルNo.',
+        'description': 'ファイル番号',
+        'source_keywords': ['ﾌｧｲﾙNO', 'ファイル', 'NO'],
+        'data_type': 'string',
+        'transformation': 'direct_copy'
+    },
+    {
+        'column': 'F',
+        'title': 'UNIT',
+        'description': 'ユニット番号',
+        'source_keywords': ['ﾕﾆｯﾄNO', 'UNIT', 'ユニット'],
+        'data_type': 'string',
+        'transformation': 'direct_copy'
+    },
+    {
+        'column': 'G',
+        'title': 'No.',
+        'description': '部品番号（整数として表示）',
+        'source_keywords': ['部品番号'],
+        'data_type': 'int',
+        'transformation': 'safe_int_convert'
+    },
+    {
+        'column': 'H',
+        'title': '品名',
+        'description': '品目名称',
+        'source_keywords': ['品目名称', '品名'],
+        'data_type': 'string',
+        'transformation': 'direct_copy'
+    },
+    {
+        'column': 'I',
+        'title': 'メーカー',
+        'description': 'メーカー名',
+        'source_keywords': ['ﾒｰｶｰ名', 'メーカー'],
+        'data_type': 'string',
+        'transformation': 'direct_copy'
+    },
+    {
+        'column': 'J',
+        'title': '材質・型式',
+        'description': '材質・型式',
+        'source_keywords': ['材質・型式', '材質', '型式'],
+        'data_type': 'string',
+        'transformation': 'direct_copy'
+    },
+    {
+        'column': 'K',
+        'title': '数',
+        'description': '受入数量（単位なし、整数）',
+        'source_keywords': ['受入数量', '数量', '数'],
+        'data_type': 'int',
+        'transformation': 'quantity_convert'
+    },
+    {
+        'column': 'L',
+        'title': '受入日',
+        'description': '受入日（納入日の日付データをそのまま）',
+        'source_keywords': ['納入日', '受入日'],
+        'data_type': 'date',
+        'transformation': 'direct_copy'
+    },
+    {
+        'column': 'M',
+        'title': '単価',
+        'description': '受入単価（数値として表示）',
+        'source_keywords': ['受入単価', '単価'],
+        'data_type': 'float',
+        'transformation': 'price_convert'
+    }
+]
+
+# 変換ロジックの説明
+TRANSFORMATION_LOGIC = {
+    'safe_int_convert_category': '数値に変換可能なもののみ変換、それ以外は0',
+    'category_mapping': '分類コードを2桁にゼロパディングし、CATEGORY_MAPPINGで置換',
+    'direct_copy': '元データをそのままコピー',
+    'safe_int_convert': '数値に変換可能なもののみ変換、それ以外は0（部品番号用）',
+    'quantity_convert': 'NaNを0に変換し、整数として表示',
+    'price_convert': 'NaNを0に変換し、数値として表示'
+}
+
 class PurchaseReportGenerator:
     """仕入レポート生成クラス"""
     
-    def __init__(self, sample_data_dir="SampleData", output_dir="ReportOutput"):
+    def __init__(self, output_dir="ReportOutput"):
         """
         初期化
         
         Args:
-            sample_data_dir (str): サンプルデータのディレクトリパス
             output_dir (str): 出力ディレクトリのパス
         """
-        self.sample_data_dir = Path(sample_data_dir)
         self.output_dir = Path(output_dir)
         self.original_data = None
-        self.molding_list = None
         self.category_mapping = None
         
         # 出力ディレクトリが存在しない場合は作成
         self.output_dir.mkdir(exist_ok=True)
+    
+    def select_file_dialog(self, title="ファイルを選択してください", file_types=None):
+        """
+        ファイル選択ダイアログを表示
         
-    def load_original_data(self, filename=None):
+        Args:
+            title (str): ダイアログのタイトル
+            file_types (list): ファイルタイプのリスト [("説明", "拡張子"), ...]
+        
+        Returns:
+            str: 選択されたファイルのパス、キャンセルされた場合はNone
+        """
+        # Tkinterのルートウィンドウを作成（非表示）
+        root = tk.Tk()
+        root.withdraw()  # メインウィンドウを非表示
+        
+        # ファイル選択ダイアログを表示
+        if file_types is None:
+            file_types = [
+                ("Excelファイル", "*.xlsx *.xls"),
+                ("すべてのファイル", "*.*")
+            ]
+        
+        file_path = filedialog.askopenfilename(
+            title=title,
+            filetypes=file_types,
+            initialdir=os.getcwd()
+        )
+        
+        # ルートウィンドウを破棄
+        root.destroy()
+        
+        return file_path if file_path else None
+    
+    def load_original_data(self, file_path=None):
         """
         オリジナルデータを読み込む
         
         Args:
-            filename (str, optional): 読み込むファイル名。Noneの場合は自動検索
+            file_path (str, optional): 読み込むファイルのパス。Noneの場合はダイアログで選択
         
         Returns:
             pandas.DataFrame: 読み込んだデータ
         """
-        if filename is None:
-            # オリジナルデータファイルを自動検索
-            original_files = list(self.sample_data_dir.glob("*_オリジナルデータ.*"))
-            if not original_files:
-                raise FileNotFoundError("オリジナルデータファイルが見つかりません")
-            file_path = original_files[0]
-        else:
-            file_path = self.sample_data_dir / filename
+        if file_path is None:
+            # ファイル選択ダイアログを表示
+            file_path = self.select_file_dialog(
+                title="オリジナルデータファイルを選択してください",
+                file_types=[
+                    ("Excelファイル", "*.xlsx *.xls"),
+                    ("すべてのファイル", "*.*")
+                ]
+            )
+            
+            if file_path is None:
+                raise ValueError("ファイルが選択されませんでした")
+        
+        file_path = Path(file_path)
         
         print(f"オリジナルデータを読み込み中: {file_path}")
         
@@ -104,50 +260,7 @@ class PurchaseReportGenerator:
             print(f"データ読み込みエラー: {e}")
             raise
     
-    def load_molding_list(self, filename=None):
-        """
-        成形リストを読み込む
-        
-        Args:
-            filename (str, optional): 読み込むファイル名。Noneの場合は自動検索
-        
-        Returns:
-            pandas.DataFrame: 読み込んだデータ
-        """
-        if filename is None:
-            # 成形リストファイルを自動検索
-            molding_files = list(self.sample_data_dir.glob("*_成形リスト.*"))
-            if not molding_files:
-                raise FileNotFoundError("成形リストファイルが見つかりません")
-            file_path = molding_files[0]
-        else:
-            file_path = self.sample_data_dir / filename
-        
-        print(f"成形リストを読み込み中: {file_path}")
-        
-        try:
-            # ファイル拡張子に応じて読み込み方法を変更
-            if file_path.suffix.lower() == '.xls':
-                # .xlsファイルの場合
-                self.molding_list = pd.read_excel(file_path, engine='xlrd')
-                # 列名の文字化けを修正
-                self.molding_list.columns = self.molding_list.columns.str.encode('latin1').str.decode('shift_jis', errors='ignore')
-                
-                # 文字列データの文字化けを修正
-                for col in self.molding_list.select_dtypes(include=['object']).columns:
-                    self.molding_list[col] = self.molding_list[col].astype(str).str.encode('latin1').str.decode('shift_jis', errors='ignore')
-            else:
-                # .xlsxファイルの場合
-                self.molding_list = pd.read_excel(file_path, engine='openpyxl')
-            
-            print(f"成形リスト読み込み完了: {len(self.molding_list)}行")
-            print(f"列名: {list(self.molding_list.columns)}")
-            
-            return self.molding_list
-            
-        except Exception as e:
-            print(f"成形リスト読み込みエラー: {e}")
-            raise
+
     
     def load_category_mapping(self, filename=None):
         """
@@ -162,97 +275,7 @@ class PurchaseReportGenerator:
         print("分類置換テーブルは内部定義を使用します")
         return CATEGORY_MAPPING
     
-    def process_molding_list(self):
-        """
-        成形リストを処理して、必要な列とフィルタ条件を抽出
-        
-        Returns:
-            dict: 成形リストの処理結果
-        """
-        if self.molding_list is None:
-            raise ValueError("成形リストが読み込まれていません")
-        
-        print("成形リストを処理中...")
-        
-        # 成形リストの構造を確認
-        print("成形リストの列名:", list(self.molding_list.columns))
-        print("成形リストの最初の10行:")
-        print(self.molding_list.head(10))
-        
-        # 成形リストから必要な情報を抽出
-        # 分類コードと置換名称の列を探す
-        category_code_col = None
-        replacement_name_col = None
-        
-        # 各列の内容を確認して分類コードと置換名称の列を特定
-        for col in self.molding_list.columns:
-            col_values = self.molding_list[col].astype(str)
-            if any('分類' in val and 'コード' in val for val in col_values):
-                category_code_col = col
-            elif any('置換' in val and '名称' in val for val in col_values):
-                replacement_name_col = col
-        
-        print(f"分類コード列: {category_code_col}")
-        print(f"置換名称列: {replacement_name_col}")
-        
-        if category_code_col is None or replacement_name_col is None:
-            # 列名が特定できない場合は、データの内容から推測
-            for i, row in self.molding_list.iterrows():
-                row_str = str(row.values)
-                if '分類' in row_str and 'コード' in row_str:
-                    # この行がヘッダー行
-                    print(f"ヘッダー行を発見: 行 {i}")
-                    print(f"ヘッダー行の内容: {row.values}")
-                    
-                    # 分類コードと置換名称の列インデックスを特定
-                    for j, val in enumerate(row.values):
-                        if '分類' in str(val) and 'コード' in str(val):
-                            category_code_col = self.molding_list.columns[j]
-                        elif '置換' in str(val) and '名称' in str(val):
-                            replacement_name_col = self.molding_list.columns[j]
-                    
-                    # ヘッダー行以降のデータを取得
-                    molding_data = self.molding_list.iloc[i+1:].copy()
-                    break
-        
-        if category_code_col is None or replacement_name_col is None:
-            raise ValueError("成形リストで分類コードまたは置換名称の列が見つかりません")
-        
-        # 分類コードと置換名称のマッピングを作成
-        category_mapping = {}
-        
-        # 成形リストの各行を確認して、有効な分類コードと置換名称を抽出
-        for i, row in self.molding_list.iterrows():
-            category_code = row[category_code_col]
-            replacement_name = row[replacement_name_col]
-            
-            # 分類コードが数値で、置換名称が有効な場合のみ処理
-            if pd.notna(category_code) and pd.notna(replacement_name):
-                try:
-                    # 分類コードを数値として確認
-                    category_code_int = int(category_code)
-                    category_code_str = str(category_code_int).zfill(2)
-                    
-                    # 置換名称が有効な文字列の場合のみ追加
-                    replacement_str = str(replacement_name).strip()
-                    if replacement_str and replacement_str != 'nan' and replacement_str != '―':
-                        # 既に存在する場合は上書きしない
-                        if category_code_str not in category_mapping:
-                            category_mapping[category_code_str] = replacement_str
-                            print(f"分類コード {category_code_str} -> {replacement_str}")
-                except (ValueError, TypeError):
-                    # 分類コードが数値でない場合はスキップ
-                    continue
-        
-        print(f"有効な分類マッピング: {category_mapping}")
-        
-        # すべての分類コードを含める（成形リストの制限を無効化）
-        print("注意: 成形リストの制限を無効化し、すべてのデータを処理します")
-        
-        return {
-            'category_mapping': category_mapping,
-            'molding_data': self.molding_list
-        }
+
     
     def apply_category_mapping(self, data):
         """
@@ -275,25 +298,23 @@ class PurchaseReportGenerator:
         
         return data_copy
     
-    def filter_data_by_molding_list(self, data, molding_info):
+    def filter_data(self, data):
         """
-        成形リストに基づいてデータを絞り込み（現在は全データを処理）
+        データを処理（全データを処理）
         
         Args:
             data (pandas.DataFrame): 対象データ
-            molding_info (dict): 成形リストの処理結果
         
         Returns:
-            pandas.DataFrame: 絞り込まれたデータ
+            pandas.DataFrame: 処理されたデータ
         """
         print("データ処理中...")
         
-        # 現在は全データを処理（成形リストの制限を無効化）
+        # 全データを処理
         filtered_data = data.copy()
         
         print(f"処理前: {len(data)}行")
         print(f"処理後: {len(filtered_data)}行")
-        print("注意: 成形リストの制限を無効化し、すべてのデータを処理しています")
         
         return filtered_data
     
@@ -462,16 +483,25 @@ class PurchaseReportGenerator:
         Returns:
             str: 見つかった列名、見つからない場合はNone
         """
+        # 完全一致を優先
+        for col in df.columns:
+            col_str = str(col)
+            for keyword in keywords:
+                if keyword == col_str:
+                    return col
+        
+        # 部分一致を試行
         for col in df.columns:
             col_lower = str(col).lower()
             for keyword in keywords:
                 if keyword.lower() in col_lower:
                     return col
+        
         return None
 
     def _format_data_for_excel(self, filtered_data):
         """
-        画像の列構成に合わせてデータを整形
+        EXCEL_OUTPUT_COLUMNSの定義に基づいてデータを整形
         
         Args:
             filtered_data (pandas.DataFrame): フィルタリングされたデータ
@@ -479,116 +509,91 @@ class PurchaseReportGenerator:
         Returns:
             pandas.DataFrame: 整形されたデータ
         """
-        # 画像の列構成に合わせてデータを整形
+        print("Excel出力形式にデータを整形中...")
         formatted_data = pd.DataFrame()
         
-        # 列名の柔軟な検索
-        category_code_col = self._find_column_by_keywords(filtered_data, ['分類', 'コード', '分類ｺｰﾄﾞ'])
-        category_name_col = self._find_column_by_keywords(filtered_data, ['分類名称'])
-        supplier_code_col = self._find_column_by_keywords(filtered_data, ['仕入先', 'コード', '仕入先ｺｰﾄﾞ'])
-        supplier_name_col = self._find_column_by_keywords(filtered_data, ['仕入先', '略称'])
-        file_no_col = self._find_column_by_keywords(filtered_data, ['ﾌｧｲﾙNO', 'ファイル', 'NO'])
-        unit_no_col = self._find_column_by_keywords(filtered_data, ['ﾕﾆｯﾄNO', 'UNIT', 'ユニット'])
-        part_no_col = self._find_column_by_keywords(filtered_data, ['部品番号'])
-        item_name_col = self._find_column_by_keywords(filtered_data, ['品目名称', '品名'])
-        manufacturer_col = self._find_column_by_keywords(filtered_data, ['ﾒｰｶｰ名', 'メーカー'])
-        material_col = self._find_column_by_keywords(filtered_data, ['材質・型式', '材質', '型式'])
-        quantity_col = self._find_column_by_keywords(filtered_data, ['受入数量', '数量', '数'])
-        delivery_date_col = self._find_column_by_keywords(filtered_data, ['納入日', '受入日'])
-        unit_price_col = self._find_column_by_keywords(filtered_data, ['受入単価', '単価'])
-        
-        # A列: 分類コード
-        if category_code_col:
-            formatted_data['分類コード'] = filtered_data[category_code_col].astype(str).str.zfill(2)
-        else:
-            formatted_data['分類コード'] = ''
-        
-        # B列: 分類名称（置換後）
-        if category_name_col:
-            # 分類置換テーブルを適用
-            category_code_col_for_mapping = self._find_column_by_keywords(filtered_data, ['分類', 'コード', '分類ｺｰﾄﾞ'])
-            if category_code_col_for_mapping:
-                formatted_data['分類名称'] = filtered_data[category_code_col_for_mapping].astype(str).str.zfill(2).map(CATEGORY_MAPPING).fillna(filtered_data[category_name_col])
-            else:
-                formatted_data['分類名称'] = filtered_data[category_name_col]
-        else:
-            formatted_data['分類名称'] = ''
-        
-        # C列: 仕入先コード
-        if supplier_code_col:
-            formatted_data['仕入先コード'] = filtered_data[supplier_code_col]
-        else:
-            formatted_data['仕入先コード'] = ''
-        
-        # D列: 仕入先
-        if supplier_name_col:
-            formatted_data['仕入先'] = filtered_data[supplier_name_col]
-        else:
-            formatted_data['仕入先'] = ''
-        
-        # E列: ファイルNo.
-        if file_no_col:
-            formatted_data['ファイルNo.'] = filtered_data[file_no_col]
-        else:
-            formatted_data['ファイルNo.'] = ''
-        
-        # F列: UNIT
-        if unit_no_col:
-            formatted_data['UNIT'] = filtered_data[unit_no_col].fillna('')
-        else:
-            formatted_data['UNIT'] = ''
-        
-        # G列: No. (部品番号) - 整数として表示
-        if part_no_col:
-            # 数値に変換可能なもののみ変換、それ以外は0
-            def safe_int_convert(x):
-                try:
-                    if pd.isna(x):
-                        return 0
-                    return int(float(x))
-                except (ValueError, TypeError):
-                    return 0
+        # 各列の定義に基づいてデータを処理
+        for col_def in EXCEL_OUTPUT_COLUMNS:
+            column_title = col_def['title']
+            source_keywords = col_def['source_keywords']
+            transformation = col_def['transformation']
+            data_type = col_def['data_type']
             
-            formatted_data['No.'] = filtered_data[part_no_col].apply(safe_int_convert)
-        else:
-            formatted_data['No.'] = 0
+            print(f"列 {col_def['column']} ({column_title}): {col_def['description']}")
+            
+            # ソース列を検索
+            source_col = self._find_column_by_keywords(filtered_data, source_keywords)
+            
+            if source_col:
+                print(f"  ソース列: {source_col}")
+                
+                # 変換ロジックを適用
+                if transformation == 'safe_int_convert_category':
+                    def safe_int_convert_category(x):
+                        try:
+                            if pd.isna(x):
+                                return 0
+                            return int(float(x))
+                        except (ValueError, TypeError):
+                            return 0
+                    
+                    formatted_data[column_title] = filtered_data[source_col].apply(safe_int_convert_category)
+                
+                elif transformation == 'category_mapping':
+                    # 分類コードを文字列に変換して2桁にゼロパディングし、分類置換テーブルを適用
+                    def safe_int_convert_category(x):
+                        try:
+                            if pd.isna(x):
+                                return 0
+                            return int(float(x))
+                        except (ValueError, TypeError):
+                            return 0
+                    
+                    # 分類コード列を検索（A列と同じソースを使用）
+                    category_code_col = self._find_column_by_keywords(filtered_data, ['分類', 'コード', '分類ｺｰﾄﾞ'])
+                    if category_code_col:
+                        category_codes = filtered_data[category_code_col].apply(safe_int_convert_category).astype(str).str.zfill(2)
+                        formatted_data[column_title] = category_codes.map(CATEGORY_MAPPING).fillna('')
+                        print(f"    分類コード列 '{category_code_col}' を使用して分類名称を生成")
+                    else:
+                        print(f"    警告: 分類コード列が見つかりません")
+                        formatted_data[column_title] = ''
+                
+                elif transformation == 'direct_copy':
+                    formatted_data[column_title] = filtered_data[source_col].fillna('')
+                
+                elif transformation == 'safe_int_convert':
+                    def safe_int_convert(x):
+                        try:
+                            if pd.isna(x):
+                                return 0
+                            return int(float(x))
+                        except (ValueError, TypeError):
+                            return 0
+                    
+                    formatted_data[column_title] = filtered_data[source_col].apply(safe_int_convert)
+                
+                elif transformation == 'quantity_convert':
+                    formatted_data[column_title] = filtered_data[source_col].fillna(0).astype(int)
+                
+                elif transformation == 'price_convert':
+                    formatted_data[column_title] = filtered_data[source_col].fillna(0)
+                
+                else:
+                    print(f"  警告: 未定義の変換ロジック '{transformation}' を使用")
+                    formatted_data[column_title] = filtered_data[source_col].fillna('')
+            
+            else:
+                print(f"  警告: ソース列が見つかりません。キーワード: {source_keywords}")
+                # デフォルト値を設定
+                if data_type == 'int':
+                    formatted_data[column_title] = 0
+                elif data_type == 'float':
+                    formatted_data[column_title] = 0.0
+                else:
+                    formatted_data[column_title] = ''
         
-        # H列: 品名 (品目名称)
-        if item_name_col:
-            formatted_data['品名'] = filtered_data[item_name_col]
-        else:
-            formatted_data['品名'] = ''
-        
-        # I列: メーカー
-        if manufacturer_col:
-            formatted_data['メーカー'] = filtered_data[manufacturer_col]
-        else:
-            formatted_data['メーカー'] = ''
-        
-        # J列: 材質・型式
-        if material_col:
-            formatted_data['材質・型式'] = filtered_data[material_col]
-        else:
-            formatted_data['材質・型式'] = ''
-        
-        # K列: 数 (受入数量のみ、単位なし)
-        if quantity_col:
-            formatted_data['数'] = filtered_data[quantity_col].fillna(0).astype(int)
-        else:
-            formatted_data['数'] = 0
-        
-        # L列: 受入日 (納入日の日付データをそのまま)
-        if delivery_date_col:
-            formatted_data['受入日'] = filtered_data[delivery_date_col]
-        else:
-            formatted_data['受入日'] = ''
-        
-        # M列: 単価 (受入単価) - 数値として表示
-        if unit_price_col:
-            formatted_data['単価'] = filtered_data[unit_price_col].fillna(0)
-        else:
-            formatted_data['単価'] = 0
-        
+        print(f"データ整形完了: {len(formatted_data)}行、{len(formatted_data.columns)}列")
         return formatted_data
     
     def display_data_info(self):
@@ -606,23 +611,31 @@ class PurchaseReportGenerator:
         print("\nデータ型:")
         print(self.original_data.dtypes)
         
-        if self.molding_list is not None:
-            print("\n=== 成形リスト情報 ===")
-            print(f"行数: {len(self.molding_list)}")
-            print(f"列数: {len(self.molding_list.columns)}")
-            print(f"列名: {list(self.molding_list.columns)}")
-            print("\n最初の5行:")
-            print(self.molding_list.head())
-        
         print("\n=== 分類置換テーブル情報 ===")
         print(f"内部定義マッピング数: {len(CATEGORY_MAPPING)}")
         print("分類コード -> 置換名称:")
         for code, name in sorted(CATEGORY_MAPPING.items()):
             print(f"  {code} -> {name}")
+        
+        print("\n=== Excel出力列定義情報 ===")
+        print(f"出力列数: {len(EXCEL_OUTPUT_COLUMNS)}")
+        print("列定義:")
+        for col_def in EXCEL_OUTPUT_COLUMNS:
+            print(f"  {col_def['column']}列: {col_def['title']}")
+            print(f"    説明: {col_def['description']}")
+            print(f"    ソースキーワード: {col_def['source_keywords']}")
+            print(f"    データ型: {col_def['data_type']}")
+            print(f"    変換ロジック: {col_def['transformation']} ({TRANSFORMATION_LOGIC.get(col_def['transformation'], '未定義')})")
+            print()
+        
+        print("=== 変換ロジック詳細 ===")
+        for logic_name, description in TRANSFORMATION_LOGIC.items():
+            print(f"  {logic_name}: {description}")
 
 def main():
     """メイン関数"""
     print("仕入レポート生成プログラムを開始します")
+    print("ファイル選択ダイアログが表示されます。")
     
     # レポート生成器のインスタンスを作成
     generator = PurchaseReportGenerator()
@@ -632,32 +645,24 @@ def main():
         print("\n=== ステップ1: オリジナルデータの読み込み ===")
         original_data = generator.load_original_data()
         
-        # 成形リストを読み込み
-        print("\n=== ステップ2: 成形リストの読み込み ===")
-        molding_list = generator.load_molding_list()
-        
         # 分類置換テーブル情報を表示
-        print("\n=== ステップ3: 分類置換テーブル情報 ===")
+        print("\n=== ステップ2: 分類置換テーブル情報 ===")
         generator.load_category_mapping()
         
         # データ情報を表示
-        print("\n=== ステップ4: データ情報の表示 ===")
+        print("\n=== ステップ3: データ情報の表示 ===")
         generator.display_data_info()
         
-        # 成形リストを処理
-        print("\n=== ステップ5: 成形リストの処理 ===")
-        molding_info = generator.process_molding_list()
-        
         # 分類置換テーブルを適用
-        print("\n=== ステップ6: 分類置換テーブルの適用 ===")
+        print("\n=== ステップ4: 分類置換テーブルの適用 ===")
         processed_data = generator.apply_category_mapping(original_data)
         
-        # 成形リストに基づいてデータを絞り込み
-        print("\n=== ステップ7: データの絞り込み ===")
-        filtered_data = generator.filter_data_by_molding_list(processed_data, molding_info)
+        # データを処理
+        print("\n=== ステップ5: データの処理 ===")
+        filtered_data = generator.filter_data(processed_data)
         
         # 処理結果を表示
-        print("\n=== ステップ8: 処理結果の表示 ===")
+        print("\n=== ステップ6: 処理結果の表示 ===")
         print(f"処理後のデータ行数: {len(filtered_data)}")
         
         # 分類別の集計
@@ -676,7 +681,7 @@ def main():
         print(filtered_data[['分類ｺｰﾄﾞ', '分類名称', '分類名称_置換後', 'ﾌｧｲﾙNO', '受入金額']].head(10))
         
         # データ出力
-        print("\n=== ステップ9: データ出力 ===")
+        print("\n=== ステップ7: データ出力 ===")
         
         # 詳細データをJSONで出力（分析用に最適化）
         json_file = generator.export_data_to_json(filtered_data)
@@ -684,21 +689,33 @@ def main():
         # 集計データをJSONで出力
         summary_file = generator.export_summary_to_json(category_summary, file_summary)
         
-        # Excelファイルを出力（成形リストフォーマット）
+        # Excelファイルを出力（指定フォーマット）
         excel_file = generator.export_to_excel_format(filtered_data, category_summary, file_summary)
         
         print("\n=== 処理完了 ===")
-        print("オリジナルデータから成形リストに基づく絞り込みと分類置換テーブルの適用が完了しました。")
+        print("オリジナルデータから分類置換テーブルの適用が完了しました。")
         print("データが以下のファイルに出力されました：")
         print(f"  - 詳細データ（JSON）: {json_file}")
         print(f"  - 集計データ（JSON）: {summary_file}")
         print(f"  - Excelファイル: {excel_file}")
         print("次のステップでは、このデータを基に分析・グラフ作成・AI予測を行います。")
         
+        # 完了メッセージを表示
+        root = tk.Tk()
+        root.withdraw()
+        messagebox.showinfo("処理完了", f"仕入レポートの生成が完了しました。\n\n出力ファイル:\n{json_file}\n{summary_file}\n{excel_file}")
+        root.destroy()
+        
     except Exception as e:
         print(f"エラーが発生しました: {e}")
         import traceback
         traceback.print_exc()
+        
+        # エラーメッセージを表示
+        root = tk.Tk()
+        root.withdraw()
+        messagebox.showerror("エラー", f"処理中にエラーが発生しました:\n{e}")
+        root.destroy()
 
 if __name__ == "__main__":
     main()
